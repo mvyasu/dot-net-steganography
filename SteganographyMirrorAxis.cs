@@ -2,7 +2,7 @@
 // Submenu: Steganography
 // Author: Atsuhiro
 // Title: Mirror Axis
-// Version: 1.1
+// Version: 1.2
 // Desc: Mirrors the pixels on a specific axis
 // Keywords:
 // URL:
@@ -10,7 +10,7 @@
 
 #region UICode
 ListBoxControl MirroredAxis = 0; // Mirrored Axis|X|Y
-CheckboxControl InvertMirror = true; // Invert
+CheckboxControl InvertMirror = false; // Invert
 DoubleSliderControl MirrorOffset = 0; // [0,1] Offset
 #endregion
 
@@ -25,38 +25,55 @@ protected override void OnRender(IBitmapEffectOutput output)
     RegionPtr<ColorBgra32> outputSubRegion = outputLock.AsRegionPtr();
     var outputRegion = outputSubRegion.OffsetView(-outputBounds.Location);
 
-    var selection = Environment.Selection.RenderBounds;
-    int selectionCenterX = (selection.Right - selection.Left) / 2 + selection.Left;
-    int selectionCenterY = (selection.Bottom - selection.Top) / 2 + selection.Top;
+    var selection = Environment.Selection.RenderBounds; 
+    
+    int mirrorDirection = (InvertMirror ? -1 : 1);
 
-    // offset affects the selectionCenterX and selectionCenterY
-    int horizontalOffset = Math.Max(0, (int)Math.Floor( MirrorOffset * (selection.Width / 2) ) ) * (InvertMirror ? -1 : 1) + 1;
-    int verticalOffset = Math.Max(0, (int)Math.Floor( MirrorOffset * (selection.Height  / 2) ) ) * (InvertMirror ? -1 : 1) + 1;
+    bool mirroredHorizontal = MirroredAxis==0;
+    int mirroredAxisLength = mirroredHorizontal ? selection.Width : selection.Height;
+    
+    // this can be half a number or a full number
+    // if it's a full number, then the axis has an even number of pixels
+    // if it's not a full number, then it must an odd number of pixels
+    double mirroredAxisCenter = (mirroredAxisLength / 2) + (MirrorOffset * (mirroredAxisLength / 2) * mirrorDirection);
 
-    selectionCenterX = selectionCenterX + horizontalOffset;
-    selectionCenterY = selectionCenterY + verticalOffset;
+    // sectionA is used for the left or top side
+    // if it's even, we'll just minus it by 1 to make the end not match the start of sectionB
+    Dictionary<string, int> sectionA = new Dictionary<string, int>();
+    sectionA["Start"] = 0;
+    sectionA["End"] = (int)Math.Floor(mirroredAxisCenter) + ((mirroredAxisCenter % 1) == 0 ? -1 : 0);
+    sectionA["Length"] = sectionA["End"] - sectionA["Start"];
 
-    bool MirrorHorizontal = MirroredAxis==0;
+    // sectionB is used for right or bottom side
+    Dictionary<string, int> sectionB = new Dictionary<string, int>();
+    sectionB["Start"] = (int)Math.Ceiling(mirroredAxisCenter);
+    sectionB["End"] = Math.Max(mirroredAxisLength - 1, sectionB["Start"]);
+    sectionB["Length"] = sectionB["End"] - sectionB["Start"];
 
-    int mirroredAxisCenter = MirrorHorizontal ? selectionCenterX : selectionCenterY;
+    //mirroredSection is the section that is being mirrored
+    //mirroringSection is the section that gets written to
+    Dictionary<string, int> mirroredSection = InvertMirror ? sectionB : sectionA;
+    Dictionary<string, int> mirroringSection = InvertMirror ? sectionA : sectionB;
 
-    int startIndex = MirrorHorizontal ? selection.Left : selection.Top;
-    int stopIndex = MirrorHorizontal ? selection.Right : selection.Bottom;
+    int inMin = InvertMirror ? mirroringSection["End"] : mirroringSection["Start"];
+    int inMax = InvertMirror ? mirroringSection["Start"] : mirroringSection["End"];
 
-    int mirrorAxisWidth = MirrorHorizontal ? selection.Width : selection.Height;
-    int mirrorWidth = InvertMirror ? mirroredAxisCenter : mirrorAxisWidth - mirroredAxisCenter;
+    int outMin = InvertMirror ? mirroredSection["Start"] : mirroredSection["End"];
+    int outMax = InvertMirror ? mirroredSection["Start"] + mirroringSection["Length"] : mirroredSection["End"] - mirroringSection["Length"];
 
     #if DEBUG
-    Debug.WriteLine(mirroredAxisCenter);
+    Debug.WriteLine("sectionA");
+    Debug.WriteLine(sectionA["Start"]);
+    Debug.WriteLine(sectionA["End"]);
+    Debug.WriteLine("---------------");
     #endif
 
-    // mirroredAxisCenter = 2
-    // mirrorWidth = 2
-    // isEven = false
-    // midpointOffset = 0
-
-    bool isMirroredAxisEven = mirrorAxisWidth % 2 == 0;
-    int midpointOffset = isMirroredAxisEven ? -1 : 0;
+    #if DEBUG
+    Debug.WriteLine("sectionB");
+    Debug.WriteLine(sectionB["Start"]);
+    Debug.WriteLine(sectionB["End"]);
+    Debug.WriteLine("---------------");
+    #endif
 
     for (int y = outputBounds.Top; y < outputBounds.Bottom; ++y)
     {
@@ -66,32 +83,18 @@ protected override void OnRender(IBitmapEffectOutput output)
         {
             ColorBgra32 sourcePixel = sourceRegion[x, y];
 
-            if (x <= selection.Right && x >= selection.Left && y <= selection.Bottom && y >= selection.Top) {
+            if (mirroredAxisLength > 1 && x <= selection.Right && x >= selection.Left && y <= selection.Bottom && y >= selection.Top) {
                 
-                int mirroredAxisIndex = MirrorHorizontal ? x : y;
+                int mirroringPixelIndex = mirroredHorizontal ? x : y;
 
-                bool isMirroredPixel = InvertMirror ? (mirroredAxisIndex <= mirroredAxisCenter) : (mirroredAxisIndex >= mirroredAxisCenter);
+                bool willContainMirroringPixel = mirroringPixelIndex >= mirroringSection["Start"] && mirroringPixelIndex <= mirroringSection["End"];
 
-                if (isMirroredPixel) {
-                    //int inMin = InvertMirror ? startIndex : mirroredAxisCenter;
-                    //int inMax = InvertMirror ? mirroredAxisCenter : stopIndex + midpointOffset;
-                    int inMin = InvertMirror ? startIndex : mirroredAxisCenter;
-                    int inMax = InvertMirror ? mirroredAxisCenter : stopIndex + midpointOffset;
-
-                    //int outMin = InvertMirror ? stopIndex + midpointOffset - 1 : mirroredAxisCenter + midpointOffset;
-                    //int outMax = InvertMirror ? mirroredAxisCenter + midpointOffset : startIndex;
-                    int outMin = InvertMirror ? mirroredAxisCenter + mirrorWidth + midpointOffset : mirroredAxisCenter + midpointOffset;                    
-                    int outMax = InvertMirror ? mirroredAxisCenter + 1 : outMin - mirrorWidth;
-
-                    int pixelBeingMirroredAxisIndex = mirrorAxisWidth > 1 ? (int)MapNumber(mirroredAxisIndex, inMin, inMax, outMin, outMax) : mirroredAxisIndex;
-
-                    #if DEBUG
-                    //Debug.WriteLine(mirrorWidth);
-                    #endif
+                if (willContainMirroringPixel) {
+                    int mirroredPixelIndex = mirroringSection["Length"] > 0 ? (int)MapNumber(mirroringPixelIndex, inMin, inMax, outMin, outMax) : outMax;
 
                     sourcePixel = sourceRegion[
-                        MirrorHorizontal ? pixelBeingMirroredAxisIndex : x,
-                        MirrorHorizontal ? y : pixelBeingMirroredAxisIndex
+                        mirroredHorizontal ? mirroredPixelIndex : x,
+                        mirroredHorizontal ? y : mirroredPixelIndex
                     ];
                 }
             }
